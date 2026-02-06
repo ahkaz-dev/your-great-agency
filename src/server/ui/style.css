@@ -1,0 +1,27 @@
+body{font-family:system-ui,Arial,sans-serif;margin:0;background:#0b0f14;color:#e6edf3}
+.app{max-width:900px;margin:32px auto;padding:0 16px}
+form{display:flex;gap:8px;margin-bottom:16px}
+input{flex:1;padding:10px;border-radius:8px;border:1px solid #263341;background:#0f1720;color:#e6edf3}
+button{padding:10px 16px;border-radius:8px;border:1px solid #345;border:none;background:#1f6feb;color:white;cursor:pointer}
+.log{background:#0f1720;border:1px solid #263341;border-radius:8px;padding:12px;height:60vh;overflow:auto;white-space:pre-wrap}
+.entry .type{opacity:.6;font-size:.85em;margin-right:6px}
+.log {
+  font-family: monospace;
+  white-space: pre-wrap;
+  overflow-y: auto;
+  max-height: 600px;
+  padding: 10px;
+  margin-top: 10px;
+  font-size: 14px;
+}
+
+.entry {
+  margin-bottom: 8px;
+  padding: 5px;
+  border-radius: 3px;
+  line-height: 1.4;
+}
+
+.type {
+  margin-right: 8px;
+}
