@@ -23,13 +23,11 @@ export function createAgent(browser: any) {
   const tools = createTools(browser);
   const collected = new Set<string>();
 
-  const system = `You are an autonomous web agent. Your behavior is driven only by the user's goal and the current page state — no fixed scripts.
+  const system = `You are an autonomous web agent. You receive the user's goal and the current page content (URL, title, elements). From that you decide the single next action. No preset rules — you infer from the goal and the page.
 
-When the goal requires finding information, options, or choices (recipes, links, articles, products, etc.), first search: navigate to a search engine, type a clear query, get results, then choose from the results by clicking. Do not guess or ask the user to choose — search, then act on what you see.
+Actions: navigate (args.url), click (args.intent), type (args.intent, args.text, args.pressEnter), scroll (args.pixels), observe, bookmark_current_page, request_user_input (args.message), request_confirmation, finish.
 
-From the goal and the page you infer: what to do next, whether the last action worked, whether something is blocking (overlay/modal), whether to close a popup or try another element. Use observations to adapt. request_user_input only when the page clearly requires login, password, captcha, or 2FA. request_confirmation only before irreversible actions (delete, pay, order). When the goal is done, return finish with summary.
-
-Actions: navigate (args.url), click (args.intent), type (args.intent, args.text, args.pressEnter), scroll (args.pixels), observe, bookmark_current_page, request_user_input, request_confirmation, finish. Return JSON: milestone?, next_action, args?, rationale, summary? (if finish), message?, pending_action?.`
+Return JSON: milestone?, next_action, args?, rationale, summary? (if finish), message?, pending_action?.`
 
 
   type PlanOutput = {
@@ -44,10 +42,10 @@ Actions: navigate (args.url), click (args.intent), type (args.intent, args.text,
 
   async function plan(goal: string, history: string, snap?: PageSnapshot): Promise<PlanOutput> {
     const pageContext = snap
-      ? `Current page (after your last action):\n${pageSnapshotToSummary(snap)}\n`
-      : 'No page loaded yet. Suggest next step from the goal (e.g. if goal needs info or options: navigate to a search engine, then type query).\n';
+      ? `Current page:\n${pageSnapshotToSummary(snap)}\n`
+      : 'No page loaded yet.\n';
     const context = `Goal: ${goal}\n\nHistory:\n${history}\n\n${pageContext}`;
-    const prompt = `From the goal and current page, decide the single next step. Need info or options → search first (navigate to search, type query), then pick from results. Overlay/modal in Hints → close or accept first. Same page or error → try popup, scroll, or different click. Return JSON only.`;
+    const prompt = `From the goal and current page content, decide the single next step. Return JSON only.`;
     const res = await chat([
       { role: 'system', content: system },
       { role: 'user', content: context + '\n' + prompt }
@@ -102,9 +100,9 @@ Actions: navigate (args.url), click (args.intent), type (args.intent, args.text,
     }
 
   async function reflect(goal: string, recent: string) {
-    const prompt = `Goal: ${goal}\nRecent:\n${recent}\n\nFrom this, are we stuck or blocked? If yes, suggest one concrete next step (e.g. close popup, scroll, different click, or search first). If we are making progress, return {}. Return JSON {adjustment?: string}.`;
+    const prompt = `Goal: ${goal}\nRecent:\n${recent}\n\nFrom this, are we stuck or blocked? If yes, suggest one next step. If we are making progress, return {}. Return JSON {adjustment?: string}.`;
     const res = await chat([
-      { role: 'system', content: 'From the goal and history you infer whether we are stuck or blocked; if so, suggest one next step. No fixed rules.' },
+      { role: 'system', content: 'From the goal and history you infer whether we are stuck or blocked; if so, suggest one next step.' },
       { role: 'user', content: prompt }
     ], { temperature: 0.15, max_tokens: 280 });
     try { return JSON.parse(res.match(/\{[\s\S]*\}$/)?.[0] || '{}'); } catch { return {}; }

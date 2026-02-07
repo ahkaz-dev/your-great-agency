@@ -1,135 +1,136 @@
-# Great Ageny
+# Great Agency
+[translated this  file to russian](./README_ru.md) 
 
-## Общее описание
+## General Overview
 
-Great Ageny — это автономный агент, который управляет браузером на базе Chromium через Playwright. Агент принимает естественноязыковые задачи через терминал CLI, сам планирует, рассуждает, выполняет действия в браузере, наблюдает и итеративно работает до завершения.
 
-**Ключевая особенность:** Агент адаптивно решает задачи.
+Great Agency is an autonomous agent that operates a Chromium-based browser through Playwright. The agent receives natural-language tasks via the CLI terminal, plans and reasons autonomously, performs browser actions, observes outcomes, and iteratively works until the task is completed.
 
-## Основной функционал
+**Key feature:** The agent adaptively solves tasks.
 
-### 1. Автоматизация браузера
-- **Playwright** с надежными действиями
-- Динамический синтез селекторов на основе LLM
-- Умное взаимодействие с веб-элементами с учетом семантики
+## Core Functionality
 
-### 2. Цикл автономии
-- **Planner + Executor + Critic**
-- Критик выполняет саморефлексию для обнаружения циклов
-- Короткосрочная рабочая память
+### 1. Browser Automation
+- **Playwright** with reliable actions  
+- Dynamic selector synthesis based on LLM  
+- Intelligent interaction with web elements considering semantics
 
-### 3. Управление контекстом
-- Сжатие наблюдений
-- Поддержание релевантного окна истории
-- Резюмирование доступных инструментов
+### 2. Autonomy Cycle
+- **Planner + Executor + Critic**  
+- The critic performs self-reflection to detect loops  
+- Short-term working memory
 
-### 4. Продвинутые паттерны
-- Иерархическое планирование с разбивкой на вехи
-- ReAct для пошагового решения задач
-- Механизм прерывания при необходимости ввода от пользователя
+### 3. Context Management
+- Observation compression  
+- Maintaining a relevant history window  
+- Summarizing available tools
 
-### 5. Безопасность
-- Бюджет навигации и действий
-- Защита от бесконечных циклов
-- Опциональные ограничения доменов
+### 4. Advanced Patterns
+- Hierarchical planning with milestone breakdown  
+- ReAct for step-by-step task solving  
+- Interrupt mechanism for user input when required
 
-## Технические требования
+### 5. Safety
+- Navigation and action budget  
+- Protection against infinite loops  
+- Optional domain restrictions
 
-### Перед началом работы
-1. **Node.js** версии 18 или выше
-2. **Python** версии 3.10 или выше
+## Technical Requirements
 
-### Установка и запуск
+### Before You Start
+1. **Node.js** version 18 or higher  
+2. **Python** version 3.10 or higher
 
-#### Шаг 1: Клонируйте репозиторий
+### Installation and Launch
+
+#### Step 1: Clone the repository
 ```bash
 git clone <repository-url>
-cd your-greay-agency
+cd your-great-agency
 ```
 
-#### Шаг 2: Установите зависимости
+#### Step 2: Install dependencies
 ```bash
 npm install
 ```
 
-#### Шаг 3: Установите браузеры Playwright
+#### Step 3: Install Playwright browsers
 ```bash
 npx playwright install --with-deps
 ```
 
-#### Шаг 4: Настройте переменные окружения
-Создайте файл `.env` на основе `.env.example`:
+#### Step 4: Configure environment variables
+Create a `.env` file based on `.env.example`:
 ```bash
 cp .env.example .env
 ```
 
-Отредактируйте `.env` файл:
+Edit the `.env` file:
 ```env
-# LLM настройки (OpenAI-compatible API)
+# LLM settings (OpenAI-compatible API)
 LLM_BASE_URL=https://api.openai.com/v1
-LLM_API_KEY=ваш-api-ключ
+LLM_API_KEY=your-api-key
 LLM_MODEL=gpt-4o-mini
 
-# Опционально: разрешенные домены (через запятую)
+# Optional: allowed domains (comma-separated)
 ALLOWED_HOSTS=
 ```
 
-### Настройка локальных моделей
-Для использования локальных моделей (например, Ollama):
+### Local Model Setup
+To use local models (e.g. Ollama):
 ```env
 LLM_BASE_URL=http://localhost:11434/v1
-LLM_MODEL=ваша-модель
+LLM_MODEL=your-model
 ```
 
-#### Шаг 5: Запуск
+#### Step 5: Run
 
-**Вариант 1: Веб-интерфейс (UI)**
+**Option 1: Web Interface (UI)**
 ```bash
-npm run agent "Найди и обобщи 3 новости о квантовых вычислениях из авторитетных источников."
+npm run agent "Find and summarize 3 news articles about quantum computing from reputable sources."
 ```
 
-## Структура проекта
+## Project Structure
 
 ```
 ai-browser-agent/
-├── .env                    # Файл переменных окружения
-├── .env.example           # Пример файла переменных окружения
-├── package.json          # Зависимости и скрипты проекта
-├── package-lock.json     # Блокировка версий зависимостей
-├── tsconfig.json         # Конфигурация TypeScript
-├── playwright.config.ts   # Конфигурация Playwright
-├── src/                  # Исходный код
-│   ├── index.ts          # Точка входа, оркестрация UI сервера и агента
-│   ├── agent/            # Логика агента
-│   │   ├── core.ts       # Основной цикл агента (Planner/Executor/Critic)
-│   │   ├── llm.ts        # Абстракция LLM (OpenAI-compatible API)
-│   │   ├── tools.ts      # Инструменты браузера для агента
-│   │   ├── selectors.ts  # Динамическое обнаружение и оценка селекторов
-│   │   └── memory.ts     # Управление контекстом и памятью
-│   ├── browser/          # Управление браузером
-│   │   └── controller.ts # Playwright обертка для надежных взаимодействий
-│   └── server/           # Серверная часть
-│       ├── server.ts     # Fastify сервер для API + WebSocket потоковая передача логов
-│       ├── vite.config.ts # Конфигурация Vite
-│       └── ui/           # Клиентская часть Vite + Vanilla TS
+├── .env                     # Environment variable file
+├── .env.example             # Example .env file
+├── package.json             # Project dependencies and scripts
+├── package-lock.json        # Dependency lockfile
+├── tsconfig.json            # TypeScript configuration
+├── playwright.config.ts     # Playwright configuration
+├── src/                     # Source code
+│   ├── index.ts             # Entry point, orchestrates UI server and agent
+│   ├── agent/               # Agent logic
+│   │   ├── core.ts          # Main agent loop (Planner/Executor/Critic)
+│   │   ├── llm.ts           # LLM abstraction (OpenAI-compatible API)
+│   │   ├── tools.ts         # Browser tools for the agent
+│   │   ├── selectors.ts     # Dynamic selector detection and evaluation
+│   │   └── memory.ts        # Context and memory management
+│   ├── browser/             # Browser control
+│   │   └── controller.ts    # Playwright wrapper for reliable interactions
+│   └── server/              # Server-side module
+│       ├── server.ts        # Fastify API + WebSocket log streaming
+│       ├── vite.config.ts   # Vite configuration
+│       └── ui/              # Client-side (Vite + Vanilla TS)
 │           ├── index.html
 │           ├── main.ts
 │           └── style.css
-└── dist/                 # Скомпилированный код (создается при сборке)
+└── dist/                    # Compiled code (created during build)
 ```
 
-## Конфигурация LLM
+## LLM Configuration
 
-Проект использует OpenAI-совместимый HTTP API для работы с языковыми моделями.
+The project uses an OpenAI-compatible HTTP API for language model interaction.
 
-## Запуск тестов
-
+## Running Tests
 ```bash
 npm run playwright
 ```
 
-## Сборка проекта
-
+## Build Project
 ```bash
 npm run build
 ```
+
