@@ -51,7 +51,42 @@ export async function createBrowserController() {
   });
   
   const page: Page = await ctx.newPage();
-  
+
+  // Стартовая страница: загрузка и подсказка пользователю
+  const loadingHtml = `<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Агент запущен</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #e8e8e8;
+      padding: 2rem;
+      text-align: center;
+    }
+    .loader { font-size: 1.5rem; margin-bottom: 1.5rem; }
+    .message { font-size: 1.1rem; opacity: 0.9; max-width: 420px; line-height: 1.5; }
+    .hint { margin-top: 2rem; font-size: 0.9rem; opacity: 0.7; }
+  </style>
+</head>
+<body>
+  <div class="loader">⏳ Загрузка...</div>
+  <p class="message">Агент анализирует задачу и ищет пути решения. Скоро здесь откроется нужная страница.</p>
+  <p class="hint">Не закрывайте это окно — управление браузером выполняет агент.</p>
+</body>
+</html>`;
+  await page.setContent(loadingHtml, { waitUntil: 'domcontentloaded' });
+
   // Set default timeout
   page.setDefaultTimeout(10000);
 
@@ -73,64 +108,53 @@ export async function createBrowserController() {
     try {
       const url = page.url();
       const title = await page.title();
-      
-      // Limit DOM evaluation for better performance
-      const nodes: DomNode[] = await page.evaluate(() => {
-        function toXPath(element: Element): string {
-          if (element === document.body) return '/html/body';
-          const ix = Array.from(element.parentNode?.childNodes || [])
-            .filter((sib: any) => sib.nodeName === element.nodeName)
-            .indexOf(element) + 1;
-          return `${toXPath(element.parentElement!)}//${element.tagName.toLowerCase()}[${ix}]`;
-        }
-        
-        function visible(el: Element) {
-          const st = window.getComputedStyle(el);
-          const rect = (el as HTMLElement).getBoundingClientRect?.();
-          return !!rect && rect.width > 5 && rect.height > 5 && 
-                 st.visibility !== 'hidden' && st.display !== 'none';
-        }
-        
-        // Focus on interactive elements only for better performance
-        const interactiveElements = Array.from(
-          document.querySelectorAll(
-            'a, button, input, textarea, select, [role], *[onclick], *[tabindex], label'
-          )
-        ) as HTMLElement[];
-        
-        return interactiveElements
-          .slice(0, 400) // Reduced for performance
-          .filter(el => visible(el))
-          .map(el => {
-            const rect = el.getBoundingClientRect();
-            const role = el.getAttribute('role');
-            const id = el.id || null;
-            const classes = Array.from(el.classList || []).slice(0, 5); // Limit classes
-            const href = (el as HTMLAnchorElement).href || null;
-            const name = (el as any).name || null;
-            const ariaLabel = el.getAttribute('aria-label');
-            const placeholder = (el as any).placeholder || null;
-            const type = (el as any).type || null;
-            const text = (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 100);
-            
-            return {
+
+      // Скрипт передаём строкой, чтобы в браузер не попадали артефакты сборки (__name и т.д.)
+      const nodes: DomNode[] = await page.evaluate(`
+        (function() {
+          function toXPath(element) {
+            if (element === document.body) return '/html/body';
+            var parent = element.parentElement;
+            if (!parent) return '/html/body';
+            var siblings = Array.prototype.filter.call(parent.childNodes, function(s) { return s.nodeName === element.nodeName; });
+            var ix = siblings.indexOf(element) + 1;
+            return toXPath(parent) + '//' + element.tagName.toLowerCase() + '[' + ix + ']';
+          }
+          function visible(el) {
+            var st = window.getComputedStyle(el);
+            var rect = el.getBoundingClientRect && el.getBoundingClientRect();
+            return rect && rect.width > 5 && rect.height > 5 && st.visibility !== 'hidden' && st.display !== 'none';
+          }
+          var interactive = document.querySelectorAll('a, button, input, textarea, select, [role], *[onclick], *[tabindex], label');
+          var list = [];
+          var max = Math.min(400, interactive.length);
+          for (var i = 0; i < max; i++) {
+            var el = interactive[i];
+            if (!visible(el)) continue;
+            var rect = el.getBoundingClientRect();
+            var text = (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 100);
+            var classes = [];
+            if (el.classList) for (var k = 0; k < Math.min(5, el.classList.length); k++) classes.push(el.classList[k]);
+            list.push({
               tag: el.tagName.toLowerCase(),
-              text,
-              role,
-              id,
-              classes,
-              href,
-              name,
-              ariaLabel,
-              placeholder,
-              type,
-              visible: true, // Already filtered
+              text: text,
+              role: el.getAttribute('role'),
+              id: el.id || null,
+              classes: classes,
+              href: el.href || null,
+              name: el.name || null,
+              ariaLabel: el.getAttribute('aria-label'),
+              placeholder: el.placeholder || null,
+              type: el.type || null,
+              visible: true,
               rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-              xpath: toXPath(el),
-            };
-          });
-      });
-      
+              xpath: toXPath(el)
+            });
+          }
+          return list;
+        })()
+      `);
+
       return { url, title, nodes };
     } catch (error) {
       console.error(`Failed to get snapshot: ${error}`);
@@ -196,10 +220,8 @@ export async function createBrowserController() {
 
   async function scroll(pixels = 800) {
     try {
-      await page.evaluate((y) => {
-        window.scrollBy(0, y);
-      }, pixels);
-      await new Promise(resolve => setTimeout(resolve, 500)); // Wait for scroll
+      await page.evaluate('window.scrollBy(0, ' + pixels + ')');
+      await new Promise(resolve => setTimeout(resolve, 500));
     } catch (error) {
       console.error(`Scroll failed: ${error}`);
     }

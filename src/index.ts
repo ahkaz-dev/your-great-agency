@@ -1,23 +1,33 @@
-import { createBrowserController } from './browser/controller.ts';
-import { createAgent } from './agent/core.ts';
+import { createInterface } from 'readline';
+import { createBrowserController } from './browser/controller.js';
+import { createAgent } from './agent/core.js';
 import dotenv from 'dotenv';
 import { performance } from 'perf_hooks';
 
 dotenv.config();
 
-// Simple console logging helper
-function log(message: string, type: 'info' | 'error' | 'success' = 'info') {
+function log(message: string, type: 'info' | 'error' | 'success' | 'warn' = 'info') {
   const timestamp = new Date().toISOString();
-  const prefix = type === 'error' ? '[ERROR]' : type === 'success' ? '[SUCCESS]' : '[INFO]';
+  const prefix = type === 'error' ? '[ERROR]' : type === 'success' ? '[SUCCESS]' : type === 'warn' ? '[INPUT]' : '[INFO]';
   console.log(`${timestamp} ${prefix}: ${message}`);
+}
+
+function askUser(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
 }
 
 async function main() {
   const args = process.argv.slice(2);
-  
+
   if (args.length === 0) {
     log('Usage: npm run agent "<task description>"', 'error');
-    log('Example: npm run agent "Find the latest news about AI"', 'info');
+    log('Example: npm run agent "Delete the last email in Gmail"', 'info');
     process.exit(1);
   }
 
@@ -28,40 +38,49 @@ async function main() {
   }
 
   log(`Starting browser automation task: "${task}"`, 'info');
-  
+
   const startTime = performance.now();
-  
+
   try {
-    // Initialize browser and agent
     log('Initializing browser...', 'info');
     const browserCtrl = await createBrowserController();
-    
+
     log('Initializing agent...', 'info');
     const agent = createAgent(browserCtrl);
-    
-    // Execute task
-    log('Executing task...', 'info');
+
     const result = await agent.runTask({
       goal: task,
       onEvent: (event) => {
         const message = event.message || JSON.stringify(event);
-        log(message, event.type === 'error' ? 'error' : 'info');
-      }
+        if (event.type === 'need_user_input') log(message, 'warn');
+        else if (event.type === 'request_confirmation') log(message, 'warn');
+        else log(message, event.type === 'error' ? 'error' : 'info');
+      },
+      waitForUserInput: async (message: string) => {
+        log(message, 'warn');
+        await askUser('\n→ Сделайте нужное действие в браузере, затем нажмите Enter для продолжения... ');
+      },
+      waitForConfirmation: async (message: string, pendingAction) => {
+        log(message, 'warn');
+        const answer = await askUser(`Выполнить действие "${pendingAction.action}"? (y/n): `);
+        return /^y|да|yes$/i.test(answer);
+      },
     });
-    
+
     const endTime = performance.now();
     const duration = ((endTime - startTime) / 1000).toFixed(2);
-    
-    log(`Task completed in ${duration} seconds`, result.status === 'success' ? 'success' : 'error');
-    log(`Status: ${result.status}`, 'info');
-    log(`Summary: ${result.summary}`, 'info');
-    
-    // Cleanup
+
+    if (result.status === 'need_user_input') {
+      log('Agent is waiting for user input. Run the same command again after you have completed the action, or the session was closed.', 'warn');
+    } else {
+      log(`Task completed in ${duration} seconds`, result.status === 'success' ? 'success' : 'error');
+      log(`Status: ${result.status}`, 'info');
+      log(`Summary: ${result.summary}`, 'info');
+    }
+
     await browserCtrl.dispose();
-    
-    // Exit with appropriate code
+
     process.exit(result.status === 'success' ? 0 : 1);
-    
   } catch (error) {
     log(`Error: ${error instanceof Error ? error.message : String(error)}`, 'error');
     process.exit(1);

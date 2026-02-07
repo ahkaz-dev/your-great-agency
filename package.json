@@ -6,8 +6,8 @@
   "scripts": {
     "build": "tsc -p .",
     "start": "node dist/index.js",
-    "dev": "ts-node --transpile-only src/index.ts",
-    "agent": "ts-node --transpile-only src/index.ts",
+    "dev": "npx tsx src/index.ts",
+    "agent": "npx tsx src/index.ts",
     "playwright": "playwright test",
     "playwright:install": "playwright install --with-deps",
     "type-check": "tsc --noEmit"
@@ -20,6 +20,7 @@
   "devDependencies": {
     "@types/node": "^20.11.19",
     "ts-node": "^10.9.2",
+    "tsx": "^4.19.2",
     "typescript": "^5.4.5"
   }
 }

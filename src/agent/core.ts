@@ -1,14 +1,20 @@
-import { chat } from './llm.ts';
-import { Memory } from './memory.ts';
-import { createTools } from './tools.ts';
-import type { PageSnapshot } from '../browser/controller.ts';
-import type { ToolEvent } from './tools.ts';
+import { chat } from './llm.js';
+import { Memory } from './memory.js';
+import { createTools } from './tools.js';
+import { pageSnapshotToSummary } from './context.js';
+import type { PageSnapshot } from '../browser/controller.js';
+import type { ToolEvent } from './tools.js';
+import type { MemoryItem } from './memory.js';
 
-export type AgentEvent = ToolEvent | { type: 'thought'|'plan'|'observation'|'milestone'|'status'|'error'; message: string; data?: any };
+export type AgentEvent = ToolEvent | { type: 'thought'|'plan'|'observation'|'milestone'|'status'|'error'|'need_user_input'|'request_confirmation'; message: string; data?: any };
 export type AgentResult = { status: 'success'|'need_user_input'|'failed'; summary: string };
-type TaskPlan = {
-  steps: string[];
-};
+
+/** Вызывается, когда агент просит пользователя что-то сделать в браузере (логин, капча и т.д.). После возврата из Promise агент продолжит с текущей страницы. */
+export type WaitForUserInputFn = (message: string) => Promise<void>;
+/** Вызывается перед деструктивным действием. true = выполнить действие, false = отменить. */
+export type WaitForConfirmationFn = (message: string, pendingAction: { action: string; args: any }) => Promise<boolean>;
+
+type TaskPlan = { steps: string[] };
 
 
 
@@ -17,18 +23,39 @@ export function createAgent(browser: any) {
   const tools = createTools(browser);
   const collected = new Set<string>();
 
-  const system = `You are an autonomous web agent. Goals: plan, act in a browser, observe, and iterate until the user's goal is achieved.\nRules:\n- Never rely on hardcoded selectors or page-specific URLs.\n- Choose actions using semantic cues (text, aria, role) and heuristics.\n- Keep steps safe and incremental.\n- Ask for missing information only when strictly necessary.\n- Provide concise thoughts and a clear next action.\nAvailable tools: navigate(url), observe(), click_by_intent(intent), type_by_intent(intent, text, pressEnter). Return JSON for tool calls as: {tool:"name", args:{...}}.`;
+  const system = `You are an autonomous web agent. Your behavior is driven only by the user's goal and the current page state — no fixed scripts.
 
-  async function plan(goal: string, history: string, snap?: PageSnapshot) {
-    const context = `Goal: ${goal}\nRecent:\n${history}\nCurrent: ${snap ? `${snap.title} @ ${snap.url}` : 'No page yet'}\n`;
-    const prompt = `${context}\nDevise next high-level plan milestone and immediate next step.\nReturn JSON with fields: milestone, next_action (one of: navigate, click, type, observe, finish),\nargs (object), and rationale (short).\nIf finish, include summary. Avoid page-specific assumptions.`;
+When the goal requires finding information, options, or choices (recipes, links, articles, products, etc.), first search: navigate to a search engine, type a clear query, get results, then choose from the results by clicking. Do not guess or ask the user to choose — search, then act on what you see.
+
+From the goal and the page you infer: what to do next, whether the last action worked, whether something is blocking (overlay/modal), whether to close a popup or try another element. Use observations to adapt. request_user_input only when the page clearly requires login, password, captcha, or 2FA. request_confirmation only before irreversible actions (delete, pay, order). When the goal is done, return finish with summary.
+
+Actions: navigate (args.url), click (args.intent), type (args.intent, args.text, args.pressEnter), scroll (args.pixels), observe, bookmark_current_page, request_user_input, request_confirmation, finish. Return JSON: milestone?, next_action, args?, rationale, summary? (if finish), message?, pending_action?.`
+
+
+  type PlanOutput = {
+    milestone?: string;
+    next_action: string;
+    args?: any;
+    rationale?: string;
+    summary?: string;
+    message?: string;
+    pending_action?: { action: string; args: any };
+  };
+
+  async function plan(goal: string, history: string, snap?: PageSnapshot): Promise<PlanOutput> {
+    const pageContext = snap
+      ? `Current page (after your last action):\n${pageSnapshotToSummary(snap)}\n`
+      : 'No page loaded yet. Suggest next step from the goal (e.g. if goal needs info or options: navigate to a search engine, then type query).\n';
+    const context = `Goal: ${goal}\n\nHistory:\n${history}\n\n${pageContext}`;
+    const prompt = `From the goal and current page, decide the single next step. Need info or options → search first (navigate to search, type query), then pick from results. Overlay/modal in Hints → close or accept first. Same page or error → try popup, scroll, or different click. Return JSON only.`;
     const res = await chat([
       { role: 'system', content: system },
-      { role: 'user', content: prompt }
-    ], { temperature: 0.2, max_tokens: 500 });
+      { role: 'user', content: context + '\n' + prompt }
+    ], { temperature: 0.2, max_tokens: 550 });
     try {
-      const json = safeParseJSON(res) || { next_action: 'observe', args: {}, rationale: 'Parsing failed, observe' };
-      return json as { milestone?: string; next_action: string; args?: any; rationale?: string; summary?: string };
+      const json = safeParseJSON(res) as PlanOutput | null;
+      if (!json?.next_action) return { next_action: 'observe', args: {}, rationale: 'Parsing failed, observe' };
+      return json;
     } catch {
       return { next_action: 'observe', args: {}, rationale: 'Parsing failed, observe' };
     }
@@ -56,7 +83,8 @@ export function createAgent(browser: any) {
     - If the goal requires multiple items, repeat actions until the count is satisfied.
     - Never stop after a single successful item if more are required.
     - Use scroll when content may be below the fold.
-
+    - Ask the user for input if it is required.
+    
     Return JSON:
     { "steps": [ "...", "..." ] }
     `;
@@ -74,11 +102,11 @@ export function createAgent(browser: any) {
     }
 
   async function reflect(goal: string, recent: string) {
-    const prompt = `Goal: ${goal}\nRecent: ${recent}\nAssess for loops or wrong direction. If adjustment needed, propose a brief correction. Return JSON {adjustment?: string}.`;
+    const prompt = `Goal: ${goal}\nRecent:\n${recent}\n\nFrom this, are we stuck or blocked? If yes, suggest one concrete next step (e.g. close popup, scroll, different click, or search first). If we are making progress, return {}. Return JSON {adjustment?: string}.`;
     const res = await chat([
-      { role: 'system', content: 'You are a critical reviewer detecting loops, proposing minor adjustments.' },
+      { role: 'system', content: 'From the goal and history you infer whether we are stuck or blocked; if so, suggest one next step. No fixed rules.' },
       { role: 'user', content: prompt }
-    ], { temperature: 0.1, max_tokens: 400 });
+    ], { temperature: 0.15, max_tokens: 280 });
     try { return JSON.parse(res.match(/\{[\s\S]*\}$/)?.[0] || '{}'); } catch { return {}; }
   }
 
@@ -113,6 +141,14 @@ export function createAgent(browser: any) {
           emit({ type: 'observation', message: `${snap.title} @ ${snap.url}` });
           return { ok: true };
         }
+        case 'scroll': {
+          const pixels = args.pixels ?? 800;
+          emit({ type: 'status', message: `Scroll -> ${pixels}px` });
+          await tools.scroll(pixels);
+          const snap = await tools.observe();
+          emit({ type: 'observation', message: `${snap.title} @ ${snap.url}` });
+          return { ok: true };
+        }
         case 'bookmark_current_page': {
             const snap = await tools.observe();
             collected.add(snap.url);
@@ -133,71 +169,113 @@ export function createAgent(browser: any) {
     }
   }
 
-  async function runTask(params: { goal: string; onEvent?: (e: AgentEvent) => void }): Promise<AgentResult> {
-    const { goal, onEvent } = params;
+  async function runTask(params: {
+    goal: string;
+    onEvent?: (e: AgentEvent) => void;
+    waitForUserInput?: WaitForUserInputFn;
+    waitForConfirmation?: WaitForConfirmationFn;
+  }): Promise<AgentResult> {
+    const { goal, onEvent, waitForUserInput, waitForConfirmation } = params;
     const emit = (e: AgentEvent) => {
       onEvent?.(e);
       memory.add({
         ts: Date.now(),
-        type: (e.type as any) || 'thought',
+        type: (e.type || 'thought') as MemoryItem['type'],
         content: e.message || JSON.stringify(e)
       });
     };
-    
+
     emit({ type: 'status', message: 'Starting task execution...' });
 
     let steps = 0;
     let lastSnap: PageSnapshot | undefined;
-    const maxSteps = 50; // Reduced for better performance
+    const maxSteps = 80;
     const startTime = Date.now();
 
     while (steps < maxSteps) {
       steps++;
       const history = memory.summarize();
-      
-      // Get plan from LLM
+
       const planOut = await plan(goal, history, lastSnap);
       if (planOut.milestone) emit({ type: 'milestone', message: planOut.milestone });
       emit({ type: 'thought', message: planOut.rationale || 'Processing...' });
 
-      // Execute the planned action
-      let action = planOut.next_action;
-      let args = planOut.args || {};
+      const action = planOut.next_action;
+      const args = planOut.args || {};
 
-      // Optional self-reflection every few steps
-      if (steps % 7 === 0) {
+      // Агент просит пользователя что-то сделать в браузере (логин, пароль, капча)
+      if (action === 'request_user_input') {
+        const message = planOut.message || 'Please complete the required action in the browser.';
+        emit({ type: 'need_user_input', message });
+        if (waitForUserInput) {
+          await waitForUserInput(message);
+          try {
+            lastSnap = await tools.observe();
+          } catch (e) {
+            emit({ type: 'error', message: `Failed to observe after user input: ${e}` });
+          }
+          continue;
+        }
+        return { status: 'need_user_input', summary: message };
+      }
+
+      // Слой безопасности: подтверждение перед деструктивным действием
+      if (action === 'request_confirmation' && planOut.pending_action) {
+        const message = planOut.message || 'Confirm this action?';
+        emit({ type: 'request_confirmation', message, data: planOut.pending_action });
+        let confirmed = false;
+        if (waitForConfirmation) {
+          confirmed = await waitForConfirmation(message, planOut.pending_action);
+        }
+        if (confirmed) {
+          const result = await execute(planOut.pending_action.action, planOut.pending_action.args, emit);
+          if (!result.ok) {
+            emit({ type: 'thought', message: 'Action failed after confirmation, observing...' });
+            await execute('observe', {}, emit);
+          }
+        } else {
+          emit({ type: 'thought', message: 'User declined. Observing page.' });
+          await execute('observe', {}, emit);
+        }
+        try {
+          lastSnap = await tools.observe();
+        } catch (_) {}
+        continue;
+      }
+
+      // Критическое осмысление чаще: каждые 4 шага или после ошибки
+      if (steps % 4 === 0) {
         const critique = await reflect(goal, memory.summarize());
         if (critique.adjustment) {
-          emit({ type: 'thought', message: `Adjustment: ${critique.adjustment}` });
+          emit({ type: 'thought', message: `Reflection: ${critique.adjustment}` });
         }
       }
 
-      // Execute action with error handling
       const result = await execute(action, args, emit);
-      
+
       if (!result.ok) {
-        // Fallback: try to observe and continue
         emit({ type: 'thought', message: 'Action failed, observing page state...' });
         await execute('observe', {}, emit);
+        // После ошибки — рефлексия: что попробовать (закрыть попап, скролл, другой клик)
+        const critique = await reflect(goal, memory.summarize());
+        if (critique.adjustment) {
+          emit({ type: 'thought', message: `After failure: ${critique.adjustment}` });
+        }
       }
 
-      // Check if task is complete
       if (action === 'finish' || (result as any).done) {
         const executionTime = ((Date.now() - startTime) / 1000).toFixed(2);
-        const sum = memory.summarize();
         emit({ type: 'status', message: `Task completed in ${executionTime}s` });
-        return { status: 'success', summary: sum.slice(-1000) };
+        return { status: 'success', summary: memory.summarize().slice(-1000) };
       }
 
-      // Update page snapshot
       try {
         lastSnap = await tools.observe();
       } catch (error) {
         emit({ type: 'error', message: `Failed to update page snapshot: ${error}` });
       }
 
-      // Check execution time
-      if (Date.now() - startTime > 300000) { // 5 minutes timeout
+      if (Date.now() - startTime > 300000) {
         emit({ type: 'error', message: 'Execution timeout reached' });
         return { status: 'failed', summary: 'Task execution timed out' };
       }

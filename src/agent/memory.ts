@@ -1,6 +1,6 @@
 export type MemoryItem = {
   ts: number;
-  type: 'thought'|'action'|'observation'|'milestone'|'error'|'summary';
+  type: 'thought'|'plan'|'action'|'observation'|'milestone'|'status'|'error'|'summary'|'need_user_input'|'request_confirmation';
   content: string;
 };
 

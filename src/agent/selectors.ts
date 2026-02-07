@@ -1,4 +1,4 @@
-import type { DomNode } from '../browser/controller.ts';
+import type { DomNode } from '../browser/controller.js';
 
 export type Candidate = { node: DomNode; score: number };
 
