@@ -15,6 +15,7 @@ type TaskPlan = {
 export function createAgent(browser: any) {
   const memory = new Memory();
   const tools = createTools(browser);
+  const collected = new Set<string>();
 
   const system = `You are an autonomous web agent. Goals: plan, act in a browser, observe, and iterate until the user's goal is achieved.\nRules:\n- Never rely on hardcoded selectors or page-specific URLs.\n- Choose actions using semantic cues (text, aria, role) and heuristics.\n- Keep steps safe and incremental.\n- Ask for missing information only when strictly necessary.\n- Provide concise thoughts and a clear next action.\nAvailable tools: navigate(url), observe(), click_by_intent(intent), type_by_intent(intent, text, pressEnter). Return JSON for tool calls as: {tool:"name", args:{...}}.`;
 
@@ -133,10 +134,7 @@ export function createAgent(browser: any) {
   }
 
   async function runTask(params: { goal: string; onEvent?: (e: AgentEvent) => void }): Promise<AgentResult> {
-    
-    
     const { goal, onEvent } = params;
-    const collected = new Set<string>();
     const emit = (e: AgentEvent) => {
       onEvent?.(e);
       memory.add({
@@ -144,72 +142,69 @@ export function createAgent(browser: any) {
         type: (e.type as any) || 'thought',
         content: e.message || JSON.stringify(e)
       });
-    };    
-    emit({ type: 'status', message: 'Decomposing task...' });
-
-    const taskPlan = await decomposeGoal(goal);
-
-    emit({
-      type: 'plan',
-      message: 'Task plan created',
-      data: taskPlan.steps
-    });
-
-    emit({ type: 'status', message: `Task started: ${goal}` });
+    };
+    
+    emit({ type: 'status', message: 'Starting task execution...' });
 
     let steps = 0;
     let lastSnap: PageSnapshot | undefined;
+    const maxSteps = 50; // Reduced for better performance
+    const startTime = Date.now();
 
-    while (steps < 100) {
-      let currentStepIndex = 0;
+    while (steps < maxSteps) {
       steps++;
       const history = memory.summarize();
+      
+      // Get plan from LLM
       const planOut = await plan(goal, history, lastSnap);
       if (planOut.milestone) emit({ type: 'milestone', message: planOut.milestone });
-      emit({ type: 'thought', message: planOut.rationale || '...' });
+      emit({ type: 'thought', message: planOut.rationale || 'Processing...' });
 
-      // ReAct: select tool
+      // Execute the planned action
       let action = planOut.next_action;
       let args = planOut.args || {};
 
-      // Optional critic every few steps
-      if (steps % 5 === 0) {
+      // Optional self-reflection every few steps
+      if (steps % 7 === 0) {
         const critique = await reflect(goal, memory.summarize());
-        if (critique.adjustment) emit({ type: 'thought', message: `Adjustment: ${critique.adjustment}` });
+        if (critique.adjustment) {
+          emit({ type: 'thought', message: `Adjustment: ${critique.adjustment}` });
+        }
       }
 
+      // Execute action with error handling
       const result = await execute(action, args, emit);
+      
       if (!result.ok) {
-        // fallback observe then continue
+        // Fallback: try to observe and continue
+        emit({ type: 'thought', message: 'Action failed, observing page state...' });
         await execute('observe', {}, emit);
       }
-      if ((result as any).done) {
+
+      // Check if task is complete
+      if (action === 'finish' || (result as any).done) {
+        const executionTime = ((Date.now() - startTime) / 1000).toFixed(2);
         const sum = memory.summarize();
-        return { status: 'success', summary: sum.slice(-800) };
+        emit({ type: 'status', message: `Task completed in ${executionTime}s` });
+        return { status: 'success', summary: sum.slice(-1000) };
       }
 
-      // Check if missing info is needed
-      const needInfo = false; // Could be inferred from planOut in future
-      if (needInfo) {
-        return { status: 'need_user_input', summary: 'Agent requires additional input.' };
+      // Update page snapshot
+      try {
+        lastSnap = await tools.observe();
+      } catch (error) {
+        emit({ type: 'error', message: `Failed to update page snapshot: ${error}` });
       }
 
-      // refresh snapshot
-      lastSnap = await tools.observe();
-
-      // budget checks
-      if (steps >= 30) break;
+      // Check execution time
+      if (Date.now() - startTime > 300000) { // 5 minutes timeout
+        emit({ type: 'error', message: 'Execution timeout reached' });
+        return { status: 'failed', summary: 'Task execution timed out' };
+      }
     }
 
-    emit({
-      type: 'error',
-      message: 'Step budget exhausted, attempting graceful stop'
-    });
-
-    return {
-      status: collected.size > 0 ? 'success' : 'failed',
-      summary: `Collected ${collected.size} items before stopping`
-    };
+    emit({ type: 'error', message: `Maximum steps (${maxSteps}) exceeded` });
+    return { status: 'failed', summary: `Task could not be completed within ${maxSteps} steps` };
   }
 
   return { runTask };

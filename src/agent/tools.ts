@@ -15,24 +15,7 @@ export function createTools(browser: ReturnType<typeof createBrowserController>)
     },
     observe: async () => {
       const snap = await (await browser).getSnapshot();
-
-      return {
-        title: snap.title,
-        url: snap.url,
-        summary: {
-          totalNodes: snap.nodes.length,
-          visible: snap.nodes.filter(n => n.visible).length,
-          inputs: snap.nodes.filter(n => n.tag === 'input').length,
-          buttons: snap.nodes.filter(n => n.tag === 'button').length,
-          links: snap.nodes.filter(n => n.tag === 'a').length,
-        },
-        sample: snap.nodes.slice(0, 20).map(n => ({
-          tag: n.tag,
-          text: n.text?.slice(0, 60),
-          role: n.role,
-          type: n.type,
-        }))
-      };
+      return snap;
     },
     click_by_intent: async (intent: string) => {
       const snap = await (await browser).getSnapshot();
