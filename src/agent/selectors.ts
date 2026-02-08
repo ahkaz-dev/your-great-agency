@@ -6,6 +6,17 @@ function normalize(s?: string | null) {
   return (s || '').toLowerCase();
 }
 
+/** Убирает селекторный синтаксис и примеры из intent, оставляет семантические слова для матчинга. */
+export function normalizeIntent(intent: string): string {
+  let s = intent
+    .replace(/\b(input|button|a)\s*\[[^\]]+\]\s*:?/gi, ' ')
+    .replace(/your_email@\S+|example\.com|password\s*=\s*\S+/gi, ' ')
+    .replace(/[\s[\]:]+/g, ' ')
+    .trim();
+  const words = s.split(/\s+/).filter(w => w.length > 1 && !/^\d+$/.test(w)).slice(0, 5);
+  return words.join(' ') || intent.slice(0, 80);
+}
+
 export function scoreNode(node: DomNode, intent: string): number {
   if (node.tag === 'input' && node.type === 'submit') {
     return -Infinity;
@@ -22,18 +33,19 @@ export function scoreNode(node: DomNode, intent: string): number {
   const placeholder = normalize(node.placeholder);
   const id = normalize(node.id || undefined);
   const classes = (node.classes || []).map(c => c.toLowerCase());
-  const intentWords = intent.toLowerCase().split(/[^a-zа-я0-9]+/i).filter(Boolean);
+  const cleanIntent = normalizeIntent(intent);
+  const intentWords = cleanIntent.toLowerCase().split(/[^a-zа-я0-9]+/i).filter(Boolean);
 
   // Heuristic semantic matches
   const keywords = new Set([ ...intentWords ]);
   const synonyms: Record<string, string[]> = {
-    search: ['search', 'find', 'go', 'submit', 'lookup'],
-    login: ['login', 'sign in', 'sign-in', 'enter', 'submit'],
-    next: ['next', 'continue', 'proceed', 'more'],
-    add: ['add', 'buy', 'cart', 'basket', 'order'],
+    search: ['search', 'find', 'go', 'submit', 'lookup', 'поиск'],
+    login: ['login', 'sign in', 'sign-in', 'enter', 'submit', 'войти', 'вход'],
+    next: ['next', 'continue', 'proceed', 'more', 'далее', 'дальше'],
+    add: ['add', 'buy', 'cart', 'basket', 'order', 'добавить', 'корзина'],
   };
   for (const [k, arr] of Object.entries(synonyms)) {
-    if (intent.includes(k)) arr.forEach(x => keywords.add(x));
+    if (cleanIntent.includes(k)) arr.forEach(x => keywords.add(x));
   }
 
   const fields = [text, aria, placeholder, id, classes.join(' ')].join(' ');

@@ -23,11 +23,17 @@ export function createAgent(browser: any) {
   const tools = createTools(browser);
   const collected = new Set<string>();
 
-  const system = `You are an autonomous web agent. You receive the user's goal and the current page content (URL, title, elements). From that you decide the single next action. No preset rules — you infer from the goal and the page.
+  const system = `You are an autonomous web agent. Your behavior is driven only by the user's goal and the current page content — no fixed scripts. You infer from the page what to do and find ways to solve the request.
 
-Actions: navigate (args.url), click (args.intent), type (args.intent, args.text, args.pressEnter), scroll (args.pixels), observe, bookmark_current_page, request_user_input (args.message), request_confirmation, finish.
+When the goal requires finding information, options, or choices (recipes, links, articles, products, etc.), first search: navigate to a search engine, type a clear query, get results, then choose from the results by clicking. Do not guess or ask the user to choose — search, then act on what you see.
 
-Return JSON: milestone?, next_action, args?, rationale, summary? (if finish), message?, pending_action?.`
+When the page is a login/sign-in page (URL or content shows sign-in, email field, password field, "Далее", "Next", "Sign in"): you MUST use request_user_input. Do NOT type email, password, or any placeholder (e.g. your_email@example.com) into login fields. The user must enter their own credentials in the browser. Your message must ask them to do that, e.g. "Please enter your email and password in the browser to sign in."
+
+From the goal and the page you infer: what to do next, whether the last action worked, whether something is blocking (overlay/modal), whether to close a popup or try another element. Use observations to adapt. If Hints say "LOGIN/SIGN-IN PAGE" — use request_user_input immediately. request_confirmation only before irreversible actions (delete, pay, order). When the goal is done, return finish with summary.
+
+For click and type: args.intent must be 1-3 semantic words only (e.g. "Sign in", "Next", "email", "search", "first link"). Never use selector syntax or example values in intent or args.text. Pick intent from the element text/role/placeholder listed in the page summary.
+
+Actions: navigate (args.url), click (args.intent), type (args.intent, args.text, args.pressEnter), scroll (args.pixels), observe, bookmark_current_page, request_user_input (message: string), request_confirmation, finish. Return JSON: milestone?, next_action, args?, rationale, summary? (if finish), message? (required for request_user_input), pending_action?.`
 
 
   type PlanOutput = {
@@ -42,14 +48,20 @@ Return JSON: milestone?, next_action, args?, rationale, summary? (if finish), me
 
   async function plan(goal: string, history: string, snap?: PageSnapshot): Promise<PlanOutput> {
     const pageContext = snap
-      ? `Current page:\n${pageSnapshotToSummary(snap)}\n`
-      : 'No page loaded yet.\n';
-    const context = `Goal: ${goal}\n\nHistory:\n${history}\n\n${pageContext}`;
-    const prompt = `From the goal and current page content, decide the single next step. Return JSON only.`;
+      ? `Current page (after your last action):\n${pageSnapshotToSummary(snap)}\n`
+      : 'No page loaded yet. Suggest next step from the goal (e.g. if goal needs info or options: navigate to a search engine, then type query).\n';
+    const lastStepSummary = snap
+      ? `\nYou are now on: "${snap.title}" @ ${snap.url}. Use the elements listed below to choose intent.\n`
+      : '';
+    const reflectionHint = /reflection:|after failure:/i.test(history)
+      ? '\nThe history above may suggest an adjustment (e.g. close popup, scroll, different click). Consider it for the next step.\n'
+      : '';
+    const context = `Goal: ${goal}\n${lastStepSummary}\nHistory:\n${history}\n\n${pageContext}${reflectionHint}`;
+    const prompt = `Decide the single next step. Intent: use only short semantic words from the page (e.g. "Next", "Sign in", "search"). If Hints say "LOGIN/SIGN-IN PAGE" → request_user_input (do not type email/password). Overlay/modal in Hints → close or accept first. Return JSON only.`;
     const res = await chat([
       { role: 'system', content: system },
       { role: 'user', content: context + '\n' + prompt }
-    ], { temperature: 0.2, max_tokens: 550 });
+    ], { temperature: 0.2, max_tokens: 620 });
     try {
       const json = safeParseJSON(res) as PlanOutput | null;
       if (!json?.next_action) return { next_action: 'observe', args: {}, rationale: 'Parsing failed, observe' };
@@ -100,9 +112,9 @@ Return JSON: milestone?, next_action, args?, rationale, summary? (if finish), me
     }
 
   async function reflect(goal: string, recent: string) {
-    const prompt = `Goal: ${goal}\nRecent:\n${recent}\n\nFrom this, are we stuck or blocked? If yes, suggest one next step. If we are making progress, return {}. Return JSON {adjustment?: string}.`;
+    const prompt = `Goal: ${goal}\nRecent:\n${recent}\n\nFrom this, are we stuck or blocked? If yes, suggest one concrete next step (e.g. close popup, scroll, different click, or search first). If we are making progress, return {}. Return JSON {adjustment?: string}.`;
     const res = await chat([
-      { role: 'system', content: 'From the goal and history you infer whether we are stuck or blocked; if so, suggest one next step.' },
+      { role: 'system', content: 'From the goal and history you infer whether we are stuck or blocked; if so, suggest one next step. No fixed rules.' },
       { role: 'user', content: prompt }
     ], { temperature: 0.15, max_tokens: 280 });
     try { return JSON.parse(res.match(/\{[\s\S]*\}$/)?.[0] || '{}'); } catch { return {}; }
@@ -122,7 +134,12 @@ Return JSON: milestone?, next_action, args?, rationale, summary? (if finish), me
           const intent = String(args.intent || args.target || 'primary action');
           emit({ type: 'status', message: `Click by intent -> ${intent}` });
           const r = await tools.click_by_intent(intent);
-          emit({ type: 'observation', message: `Clicked. New title?` , data: r});
+          try {
+            const snap = await tools.observe();
+            emit({ type: 'observation', message: `After click: page is now "${snap.title}" @ ${snap.url}`, data: r });
+          } catch {
+            emit({ type: 'observation', message: `Clicked.`, data: r });
+          }
           return { ok: true };
         }
         case 'type': {
@@ -131,7 +148,12 @@ Return JSON: milestone?, next_action, args?, rationale, summary? (if finish), me
           const pressEnter = !!args.pressEnter;
           emit({ type: 'status', message: `Type by intent -> ${intent}: ${text}` });
           const r = await tools.type_by_intent(intent, text, pressEnter);
-          emit({ type: 'observation', message: `Typed`, data: r });
+          try {
+            const snap = await tools.observe();
+            emit({ type: 'observation', message: `After type: page is now "${snap.title}" @ ${snap.url}`, data: r });
+          } catch {
+            emit({ type: 'observation', message: `Typed.`, data: r });
+          }
           return { ok: true };
         }
         case 'observe': {

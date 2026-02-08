@@ -1,4 +1,4 @@
-import { chromium } from 'playwright-extra';
+import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
 
 export type DomNode = {
